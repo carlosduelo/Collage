@@ -24,6 +24,10 @@
 #include <co/types.h>
 #include <string>
 
+#ifdef COLLAGE_USE_MPI
+#  include <lunchbox/mpi.h>
+#endif
+
 namespace co
 {
     /** Global parameter handling for the Collage library. */
@@ -122,6 +126,12 @@ namespace co
         /** @internal @return the interpreted command thread queue size. */
         CO_API static size_t getCommandQueueLimit();
         //@}
+
+        #ifdef COLLAGE_USE_MPI
+        CO_API static void initMPI( int& argc, char**& argv );
+
+        static lunchbox::MPI * mpi;
+        #endif
     };
 }
 

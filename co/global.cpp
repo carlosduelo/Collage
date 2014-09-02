@@ -27,6 +27,10 @@
 #include <vector>
 #include <sstream>
 
+#ifdef COLLAGE_USE_MPI
+lunchbox::MPI * co::Global::mpi = 0;
+#endif
+
 namespace co
 {
 #define SEPARATOR '#'
@@ -211,5 +215,16 @@ size_t Global::getCommandQueueLimit()
         return size_t( limit ) << 10;
     return std::numeric_limits< size_t >::max();
 }
+
+#ifdef COLLAGE_USE_MPI
+void Global::initMPI( int& argc, char**& argv )
+{
+    if( !mpi ) // Do not init if already init
+    {
+        static lunchbox::MPI _mpi( argc, argv );
+        mpi = &_mpi;
+    }
+}
+#endif
 
 }

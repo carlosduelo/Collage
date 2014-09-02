@@ -25,8 +25,6 @@
 
 #include <lunchbox/monitor.h>
 #include <lunchbox/scopedMutex.h>
-#include <lunchbox/mtQueue.h>
-#include <lunchbox/thread.h>
 #include<lunchbox/mpi.h>
 
 #include <map>
@@ -88,78 +86,13 @@ class MPIConnection : public Connection
     private:
         void _close();
 
-        struct Petition
-        {
-            int64_t bytes;
-            void *  data;
-        };
-
-        class Dispatcher : lunchbox::Thread
-        {
-        public:
-            Dispatcher( const int32_t rank, const int32_t source,
-                        const int32_t tag, const int32_t tagClose,
-                        EventConnectionPtr notifier);
-
-            ~Dispatcher();
-
-            virtual void run();
-
-            int64_t readSync(void * buffer, const int64_t bytes);
-
-            bool close();
-        private:
-            int64_t _copyFromBuffer( void * buffer, const int64_t bytes );
-
-            int64_t _receiveMessage( void * buffer, int64_t bytes );
-
-            bool _waitAndCheckEOF( );
-
-            const int32_t _rank;
-            const int32_t _source;
-            const int32_t _tag;
-            const int32_t _tagClose;
-
-            EventConnectionPtr _notifier;
-
-            unsigned char * _bufferData;
-            unsigned char * _startData;
-            int64_t         _bytesReceived;
-
-            lunchbox::MTQueue< Petition > _dispatcherQ;
-            lunchbox::MTQueue< int64_t >  _readyQ;
-
-        };
-
-        /* Due to accept a new connection when listenting is
-         * an asynchronous process, this class perform the
-         * accepting process in a different thread.
-         */
-        class AsyncConnection : lunchbox::Thread
-        {
-        public:
-            AsyncConnection( MPIConnection * detail, const int32_t tag,
-                                EventConnectionPtr notifier);
-            void abort();
-
-            bool wait();
-
-            MPIConnection * getImpl();
-
-            virtual void run();
-        private:
-            MPIConnection * _detail;
-            const int32_t   _tag;
-            bool            _status;
-
-            EventConnectionPtr  _notifier;
-        };
-
         int32_t     _rank;
         int32_t     _peerRank;
         int32_t     _tagSend;
         int32_t     _tagRecv;
 
+        class Dispatcher;
+        class AsyncConnection;
         AsyncConnection * _asyncConnection;
         Dispatcher  *     _dispatcher;
 

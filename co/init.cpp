@@ -56,7 +56,7 @@ bool _init( const int argc, char** argv )
         return false;
 
     #ifdef COLLAGE_USE_MPI
-    static lunchbox::MPI mpi( (int&)argc, argv );
+    Global::initMPI( (int&)argc, argv );
     #endif
 
     // init all available plugins

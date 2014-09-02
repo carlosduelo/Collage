@@ -28,10 +28,10 @@
 #include <iostream>
 
 #ifdef COLLAGE_USE_MPI
+#  include <co/global.h>
 #  include <lunchbox/mpi.h>
-#  include <mpi.h>
-#  define NPACKETS   (1000)
 #endif
+#define NPACKETS 1
 
 
 #define PACKETSIZE (123456)
@@ -49,6 +49,7 @@ static co::ConnectionType types[] =
     co::CONNECTIONTYPE_RSP,
     co::CONNECTIONTYPE_RDMA,
 //    co::CONNECTIONTYPE_UDT,
+    co::CONNECTIONTYPE_MPI,
     co::CONNECTIONTYPE_NONE // must be last
 };
 
@@ -132,89 +133,6 @@ private:
     co::ConnectionPtr connection_;
 };
 
-#ifdef COLLAGE_USE_MPI
-void runMPITest()
-{
-    co::ConnectionDescriptionPtr desc = new co::ConnectionDescription;
-    desc->type = co::CONNECTIONTYPE_MPI;
-    desc->rank = 0;
-    desc->port = 2048;
-    desc->setHostname( "127.0.0.1" );
-
-    lunchbox::Clock clock;
-    lunchbox::MPI mpi;
-
-    if( mpi.getRank() == 0 )
-    {
-        co::ConnectionPtr listener = co::Connection::create( desc );
-        if( !listener )
-        {
-            std::cout << desc->type << ": not supported" << std::endl;
-            return;
-        }
-
-        MPI_Barrier( MPI_COMM_WORLD );
-
-        const bool listening = listener->listen();
-        if( !listening )
-            return;
-
-        TESTINFO( listening, desc );
-        listener->acceptNB();
-        co::ConnectionPtr reader = listener->acceptSync();
-
-        TEST( reader );
-
-        co::Buffer buffer;
-        co::BufferPtr syncBuffer;
-
-        clock.reset();
-        for( size_t j = 0; j < NPACKETS; ++j )
-        {
-            reader->recvNB( &buffer, PACKETSIZE );
-            TEST( reader->recvSync( syncBuffer ));
-            TEST( syncBuffer == &buffer );
-            TEST( buffer.getSize() == PACKETSIZE );
-            buffer.setSize( 0 );
-        }
-
-        reader->recvNB( &buffer, PACKETSIZE );
-        TEST( !reader->recvSync( syncBuffer ));
-        TEST( reader->isClosed( ));
-
-        if( listener.isValid( ))
-            TEST( listener->getRefCount() == 1 );
-        if( reader.isValid( ))
-            TEST( reader->getRefCount() == 1 );
-    }
-    else
-    {
-        MPI_Barrier( MPI_COMM_WORLD );
-
-        co::ConnectionPtr writer = co::Connection::create( desc );
-        TEST( writer->connect( ));
-
-        TEST( writer );
-        uint8_t out[ PACKETSIZE ];
-
-        clock.reset();
-        for( size_t j = 0; j < NPACKETS; ++j )
-            TEST( writer->send( out, PACKETSIZE ));
-
-        writer->close();
-
-        TEST( writer->getRefCount() == 1 );
-    }
-
-    const float time = clock.getTimef();
-
-    std::cout << desc->type << " rank "
-              << mpi.getRank() << ": "
-              << NPACKETS * PACKETSIZE / 1024.f / 1024.f * 1000.f / time
-              << " MB/s" << std::endl;
-}
-#endif
-
 bool _initialize( co::ConnectionDescriptionPtr desc,
                   co::ConnectionPtr& listener,
                   co::ConnectionPtr& writer )
@@ -244,6 +162,14 @@ bool _initialize( co::ConnectionDescriptionPtr desc,
         writer = listener;
         break;
 
+    case co::CONNECTIONTYPE_MPI:
+    {
+        if( !co::Global::mpi->supportsThreads() )
+            return false;
+
+        desc->port = 2048;
+        desc->rank = 0;
+    }
     default:
     {
         const bool listening = listener->listen();
@@ -270,16 +196,7 @@ int main( int argc, char **argv )
     co::init( argc, argv );
 
     #ifdef COLLAGE_USE_MPI
-    /* Check if started with mpirun and size of MPI_COMM_WORLD
-     * is equal to 2.
-     */
     lunchbox::MPI mpi( argc, argv );
-    if( mpi.supportsThreads() && mpi.getSize() == 2 )
-    {
-        runMPITest();
-        co::exit();
-        return EXIT_SUCCESS;
-    }
     #endif
 
     for( size_t i = 0; types[i] != co::CONNECTIONTYPE_NONE; ++i )
