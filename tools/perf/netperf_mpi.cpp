@@ -29,6 +29,9 @@
 #  include <boost/program_options.hpp>
 #pragma warning( default: 4275 )
 #include <iostream>
+#ifdef COLLAGE_USE_MPI
+#  include <mpi.h>
+#endif
 
 #ifndef MIN
 #  define MIN LB_MIN
@@ -38,7 +41,6 @@ namespace po = boost::program_options;
 
 namespace
 {
-co::ConnectionSet   _connectionSet;
 lunchbox::a_int32_t _nClients;
 lunchbox::Lock      _mutexPrint;
 uint32_t _delay = 0;
@@ -135,6 +137,7 @@ private:
     co::Buffer _buffer;
     lunchbox::Monitor< bool > _hasConnection;
     co::ConnectionPtr _connection;
+    co::ConnectionSet   _connectionSet;
     const float _mBytesSec;
     size_t      _nSamples;
     uint8_t     _lastPacket;
@@ -155,6 +158,9 @@ public:
             _connection->acceptNB();
             _connectionSet.addConnection( _connection );
 
+        MPI_Barrier( MPI_COMM_WORLD );
+
+std::cout<<" INIT "<<std::endl;
             // Get first client
             const co::ConnectionSet::Event event = _connectionSet.select();
             LBASSERT( event == co::ConnectionSet::EVENT_CONNECT );
@@ -183,6 +189,7 @@ public:
         co::ConnectionPtr newConn;
         const bool multicast = _connection->getDescription()->type >=
                                co::CONNECTIONTYPE_MULTICAST;
+std::cout<<" RUN "<<std::endl;
 
         while( _nClients > 0 )
         {
@@ -286,12 +293,14 @@ public:
         }
         LBASSERTINFO( _receivers.empty(), _receivers.size() );
         LBASSERTINFO( _connectionSet.getSize() <= 1, _connectionSet.getSize( ));
+        _connection = 0;
     }
 
 private:
     typedef std::pair< Receiver*, co::ConnectionPtr > RecvConn;
     typedef std::vector< RecvConn > RecvConns;
     co::ConnectionPtr    _connection;
+    co::ConnectionSet   _connectionSet;
     RecvConns _receivers;
     const size_t _packetSize;
     const bool _useThreads;
@@ -299,13 +308,24 @@ private:
 
 #ifdef COLLAGE_USE_MPI
 void runMPI( bool useThreads, size_t packetSize,
-        size_t nPackets, uint32_t waitTime)
+        size_t nPackets, uint32_t waitTime, co::ConnectionType type)
 {
     co::ConnectionDescriptionPtr description = new co::ConnectionDescription;
-    description->type = co::CONNECTIONTYPE_MPI;
+    description->type = type;
     description->port = 4242;
     description->rank = 0;
-    description->setHostname( "localhost" );
+    char hostname[MPI_MAX_PROCESSOR_NAME];
+
+    if( co::Global::mpi->getRank() == 0 )
+    {
+        int r = 0;
+        MPI_Get_processor_name( hostname, &r );
+    }
+
+    MPI_Bcast( hostname, MPI_MAX_PROCESSOR_NAME, MPI_CHAR, 0, MPI_COMM_WORLD ); 
+    description->setHostname( hostname );
+
+    std::cout << "Server hostname " << hostname << std::endl;
 
     const bool isClient =  co::Global::mpi->getRank() != 0;
     // run
@@ -318,6 +338,7 @@ void runMPI( bool useThreads, size_t packetSize,
 
     if( isClient )
     {
+        MPI_Barrier( MPI_COMM_WORLD );
         if( !connection->connect( ))
             ::exit( EXIT_FAILURE );
 
@@ -464,7 +485,8 @@ int main( int argc, char **argv )
     if( co::Global::mpi->supportsThreads() &&
             co::Global::mpi->getSize() > 1 )
     {
-        runMPI( useThreads, packetSize, nPackets, waitTime);
+        runMPI( useThreads, packetSize, nPackets, waitTime, co::CONNECTIONTYPE_MPI);
+        runMPI( useThreads, packetSize, nPackets, waitTime, co::CONNECTIONTYPE_TCPIP);
         co::exit();
         return EXIT_SUCCESS;
     }
