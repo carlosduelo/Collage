@@ -218,18 +218,8 @@ public:
 
         _dispatcherQ.push( Petition{ -1, 0 } );
         MPI_Request toSource;
-        MPI_Request toOneself;
 
         unsigned char eof = 0xFF;
-        if( MPI_SUCCESS != MPI_Isend( &eof, 1,
-                                        MPI_BYTE,
-                                        _rank,
-                                        _tag,
-                                        MPI_COMM_WORLD,
-                                        &toOneself ) )
-        {
-            LBWARN << "Error sending eof to local " << std::endl;
-        }
         if( MPI_SUCCESS != MPI_Isend( &eof, 1,
                                         MPI_BYTE,
                                         _source,
@@ -244,7 +234,7 @@ public:
 
         /** Cancel requests whether Send has not finished */
         int endSource = -1;
-        if( MPI_SUCCESS != MPI_Test( &toSource, &endSource, MPI_STATUS_IGNORE ) )
+        if( MPI_SUCCESS != MPI_Wait( &toSource, MPI_STATUS_IGNORE ) )
         {
             LBWARN << "Error sending eof to local " << std::endl;
             return false;
@@ -253,18 +243,6 @@ public:
             if( MPI_SUCCESS != MPI_Cancel( &toSource ) )
             {
                 LBWARN << "Error sending eof to local " << std::endl;
-                return false;
-            }
-        int endOneself = -1;
-        if( MPI_SUCCESS != MPI_Test( &toOneself, &endOneself, MPI_STATUS_IGNORE ) )
-        {
-            LBWARN << "Error sending eof to remote " << std::endl;
-            return false;
-        }
-        if( !endOneself )
-            if( MPI_SUCCESS != MPI_Cancel( &toOneself ) )
-            {
-                LBWARN << "Error sending eof to remote " << std::endl;
                 return false;
             }
 
@@ -384,7 +362,7 @@ private:
                                                 MPI_COMM_WORLD,
                                                 MPI_STATUS_IGNORE ) )
                 {
-                    LBERROR << "Error retrieving messages " << std::endl;
+                    LBERROR << "Error retrieving messages" << std::endl;
                     bytesRead  = -1;
                     break;
                 }
@@ -431,7 +409,7 @@ private:
                                         MPI_COMM_WORLD,
                                         &status ) )
         {
-            LBERROR << "Error retrieving messages " << std::endl;
+            LBERROR << "Error retrieving messages" << std::endl;
             return true;
         }
 
@@ -440,7 +418,7 @@ private:
         /** Consult number of bytes received. */
         if( MPI_SUCCESS != MPI_Get_count( &status, MPI_BYTE, &bytesR) )
         {
-            LBERROR << "Error retrieving messages " << std::endl;
+            LBERROR << "Error retrieving messages" << std::endl;
             return true;
         }
 
@@ -486,7 +464,6 @@ private:
 
     lunchbox::MTQueue< Petition > _dispatcherQ;
     lunchbox::MTQueue< int64_t >  _readyQ;
-
 };
 
 /* Due to accept a new connection when listenting is
@@ -861,7 +838,7 @@ int64_t MPIConnection::readSync( void* buffer, const uint64_t bytes, const bool)
     /** If error close. */
     if( bytesRead < 0 )
     {
-        LBWARN << "Read error, closing connection" << std::endl;
+        LBINFO << "Read error, closing connection" << std::endl;
         _close();
         return -1;
     }
