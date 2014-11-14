@@ -158,9 +158,10 @@ public:
             _connection->acceptNB();
             _connectionSet.addConnection( _connection );
 
-        MPI_Barrier( MPI_COMM_WORLD );
+            if( co::Global::mpi->supportsThreads() &&
+                    co::Global::mpi->getSize() > 1 )
+                    MPI_Barrier( MPI_COMM_WORLD );
 
-std::cout<<" INIT "<<std::endl;
             // Get first client
             const co::ConnectionSet::Event event = _connectionSet.select();
             LBASSERT( event == co::ConnectionSet::EVENT_CONNECT );
@@ -189,7 +190,6 @@ std::cout<<" INIT "<<std::endl;
         co::ConnectionPtr newConn;
         const bool multicast = _connection->getDescription()->type >=
                                co::CONNECTIONTYPE_MULTICAST;
-std::cout<<" RUN "<<std::endl;
 
         while( _nClients > 0 )
         {
@@ -307,29 +307,17 @@ private:
 };
 
 #ifdef COLLAGE_USE_MPI
-void runMPI( bool useThreads, size_t packetSize,
-        size_t nPackets, uint32_t waitTime, co::ConnectionType type)
+void runMPI( co::ConnectionPtr& connection, Selector * selector LB_UNUSED,
+             const size_t packetSize, const bool useThreads )
 {
     co::ConnectionDescriptionPtr description = new co::ConnectionDescription;
-    description->type = type;
+    description->type = co::CONNECTIONTYPE_MPI;
     description->port = 4242;
     description->rank = 0;
-    char hostname[MPI_MAX_PROCESSOR_NAME];
-
-    if( co::Global::mpi->getRank() == 0 )
-    {
-        int r = 0;
-        MPI_Get_processor_name( hostname, &r );
-    }
-
-    MPI_Bcast( hostname, MPI_MAX_PROCESSOR_NAME, MPI_CHAR, 0, MPI_COMM_WORLD ); 
-    description->setHostname( hostname );
-
-    std::cout << "Server hostname " << hostname << std::endl;
-
     const bool isClient =  co::Global::mpi->getRank() != 0;
+
     // run
-    co::ConnectionPtr connection = co::Connection::create( description );
+    connection = co::Connection::create( description );
     if( !connection )
     {
         LBWARN << "Unsupported connection: " << description << std::endl;
@@ -337,70 +325,9 @@ void runMPI( bool useThreads, size_t packetSize,
     }
 
     if( isClient )
-    {
         MPI_Barrier( MPI_COMM_WORLD );
-        if( !connection->connect( ))
-            ::exit( EXIT_FAILURE );
-
-        lunchbox::Buffer< uint8_t > buffer;
-        buffer.resize( packetSize );
-        for( size_t i = 0; i<packetSize; ++i )
-            buffer[i] = static_cast< uint8_t >( i );
-
-        const float mBytesSec = buffer.getSize() / 1024.0f / 1024.0f * 1000.0f;
-        lunchbox::Clock clock;
-        size_t lastOutput = nPackets;
-
-        clock.reset();
-        while( nPackets-- )
-        {
-            buffer[SEQUENCE] = uint8_t( nPackets );
-            LBCHECK( connection->send( buffer.getData(), buffer.getSize() ));
-            const float time = clock.getTimef();
-            if( time > 1000.f )
-            {
-                const lunchbox::ScopedMutex<> mutex( _mutexPrint );
-                const size_t nSamples = lastOutput - nPackets;
-                std::cerr << "Send perf: " << mBytesSec / time * nSamples
-                    << "MB/s (" << nSamples / time * 1000.f  << "pps)"
-                    << std::endl;
-
-                lastOutput = nPackets;
-                clock.reset();
-            }
-            if( waitTime > 0 )
-                lunchbox::sleep( waitTime );
-        }
-        const float time = clock.getTimef();
-        const size_t nSamples = lastOutput - nPackets;
-        if( nSamples != 0 )
-        {
-            const lunchbox::ScopedMutex<> mutex( _mutexPrint );
-            std::cerr << "Send perf: " << mBytesSec / time * nSamples
-                << "MB/s (" << nSamples / time * 1000.f  << "pps)"
-                << std::endl;
-        }
-    }
     else
-    {
-        Selector* selector = 0;
         selector = new Selector( connection, packetSize, useThreads );
-
-        selector->start();
-
-        LBASSERTINFO( connection->getRefCount()>=1, connection->getRefCount( ));
-
-        if ( selector )
-            selector->join();
-
-        delete selector;
-
-        connection->close();
-    }
-
-
-    LBASSERTINFO( connection->getRefCount() == 1, connection->getRefCount( ));
-    connection = 0;
 }
 #endif
 
@@ -478,6 +405,9 @@ int main( int argc, char **argv )
         return EXIT_FAILURE;
     }
 
+    co::ConnectionPtr connection;
+    Selector* selector = 0;
+
 #ifdef COLLAGE_USE_MPI
     /* Check if started with mpirun and size of MPI_COMM_WORLD
      * is equal to 2.
@@ -485,23 +415,22 @@ int main( int argc, char **argv )
     if( co::Global::mpi->supportsThreads() &&
             co::Global::mpi->getSize() > 1 )
     {
-        runMPI( useThreads, packetSize, nPackets, waitTime, co::CONNECTIONTYPE_MPI);
-        runMPI( useThreads, packetSize, nPackets, waitTime, co::CONNECTIONTYPE_TCPIP);
-        co::exit();
-        return EXIT_SUCCESS;
+        runMPI( connection, selector, packetSize, useThreads );
+        isClient =  co::Global::mpi->getRank() != 0;
     }
+    else
 #endif
-
-    // run
-    co::ConnectionPtr connection = co::Connection::create( description );
-    if( !connection )
     {
-        LBWARN << "Unsupported connection: " << description << std::endl;
-        co::exit();
-        return EXIT_FAILURE;
+        // run
+        connection = co::Connection::create( description );
+        if( !connection )
+        {
+            LBWARN << "Unsupported connection: " << description << std::endl;
+            co::exit();
+            return EXIT_FAILURE;
+        }
     }
 
-    Selector* selector = 0;
     if( isClient )
     {
         if( description->type == co::CONNECTIONTYPE_RSP )
@@ -558,7 +487,8 @@ int main( int argc, char **argv )
     }
     else
     {
-        selector = new Selector( connection, packetSize, useThreads );
+        if( !selector ) // MPI connection selector already created
+            selector = new Selector( connection, packetSize, useThreads );
         selector->start();
 
         LBASSERTINFO( connection->getRefCount()>=1, connection->getRefCount( ));
@@ -566,7 +496,6 @@ int main( int argc, char **argv )
         if ( selector )
             selector->join();
     }
-
 
     delete selector;
     LBASSERTINFO( connection->getRefCount() == 1, connection->getRefCount( ));
