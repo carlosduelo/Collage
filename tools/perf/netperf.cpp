@@ -29,6 +29,9 @@
 #  include <boost/program_options.hpp>
 #pragma warning( default: 4275 )
 #include <iostream>
+#ifdef COLLAGE_USE_MPI
+#  include <mpi.h>
+#endif
 
 #ifndef MIN
 #  define MIN LB_MIN
@@ -38,7 +41,6 @@ namespace po = boost::program_options;
 
 namespace
 {
-co::ConnectionSet   _connectionSet;
 lunchbox::a_int32_t _nClients;
 lunchbox::Lock      _mutexPrint;
 uint32_t _delay = 0;
@@ -135,6 +137,7 @@ private:
     co::Buffer _buffer;
     lunchbox::Monitor< bool > _hasConnection;
     co::ConnectionPtr _connection;
+    co::ConnectionSet   _connectionSet;
     const float _mBytesSec;
     size_t      _nSamples;
     uint8_t     _lastPacket;
@@ -154,6 +157,10 @@ public:
             LBCHECK( _connection->listen( ));
             _connection->acceptNB();
             _connectionSet.addConnection( _connection );
+
+            if( co::Global::mpi->supportsThreads() &&
+                    co::Global::mpi->getSize() > 1 )
+                    MPI_Barrier( MPI_COMM_WORLD );
 
             // Get first client
             const co::ConnectionSet::Event event = _connectionSet.select();
@@ -286,16 +293,43 @@ public:
         }
         LBASSERTINFO( _receivers.empty(), _receivers.size() );
         LBASSERTINFO( _connectionSet.getSize() <= 1, _connectionSet.getSize( ));
+        _connection = 0;
     }
 
 private:
     typedef std::pair< Receiver*, co::ConnectionPtr > RecvConn;
     typedef std::vector< RecvConn > RecvConns;
     co::ConnectionPtr    _connection;
+    co::ConnectionSet   _connectionSet;
     RecvConns _receivers;
     const size_t _packetSize;
     const bool _useThreads;
 };
+
+#ifdef COLLAGE_USE_MPI
+void runMPI( co::ConnectionPtr& connection, Selector * selector LB_UNUSED,
+             const size_t packetSize, const bool useThreads )
+{
+    co::ConnectionDescriptionPtr description = new co::ConnectionDescription;
+    description->type = co::CONNECTIONTYPE_MPI;
+    description->port = 4242;
+    description->rank = 0;
+    const bool isClient =  co::Global::mpi->getRank() != 0;
+
+    // run
+    connection = co::Connection::create( description );
+    if( !connection )
+    {
+        LBWARN << "Unsupported connection: " << description << std::endl;
+        return;
+    }
+
+    if( isClient )
+        MPI_Barrier( MPI_COMM_WORLD );
+    else
+        selector = new Selector( connection, packetSize, useThreads );
+}
+#endif
 
 }
 
@@ -371,16 +405,32 @@ int main( int argc, char **argv )
         return EXIT_FAILURE;
     }
 
-    // run
-    co::ConnectionPtr connection = co::Connection::create( description );
-    if( !connection )
+    co::ConnectionPtr connection;
+    Selector* selector = 0;
+
+#ifdef COLLAGE_USE_MPI
+    /* Check if started with mpirun and size of MPI_COMM_WORLD
+     * is equal to 2.
+     */
+    if( co::Global::mpi->supportsThreads() &&
+            co::Global::mpi->getSize() > 1 )
     {
-        LBWARN << "Unsupported connection: " << description << std::endl;
-        co::exit();
-        return EXIT_FAILURE;
+        runMPI( connection, selector, packetSize, useThreads );
+        isClient =  co::Global::mpi->getRank() != 0;
+    }
+    else
+#endif
+    {
+        // run
+        connection = co::Connection::create( description );
+        if( !connection )
+        {
+            LBWARN << "Unsupported connection: " << description << std::endl;
+            co::exit();
+            return EXIT_FAILURE;
+        }
     }
 
-    Selector* selector = 0;
     if( isClient )
     {
         if( description->type == co::CONNECTIONTYPE_RSP )
@@ -437,7 +487,8 @@ int main( int argc, char **argv )
     }
     else
     {
-        selector = new Selector( connection, packetSize, useThreads );
+        if( !selector ) // MPI connection selector already created
+            selector = new Selector( connection, packetSize, useThreads );
         selector->start();
 
         LBASSERTINFO( connection->getRefCount()>=1, connection->getRefCount( ));
@@ -445,7 +496,6 @@ int main( int argc, char **argv )
         if ( selector )
             selector->join();
     }
-
 
     delete selector;
     LBASSERTINFO( connection->getRefCount() == 1, connection->getRefCount( ));

@@ -28,6 +28,9 @@
 #include <boost/program_options.hpp>
 #pragma warning( default: 4275 )
 #include <iostream>
+#ifdef COLLAGE_USE_MPI
+#  include <mpi.h>
+#endif
 
 #ifndef MIN
 #  define MIN LB_MIN
@@ -146,6 +149,30 @@ bool commandHandler( C command, Buffer& buffer, const uint64_t seed )
     }
     return true;
 }
+
+#ifdef COLLAGE_USE_MPI
+void runMPI( co::LocalNodePtr localNode )
+{
+    co::ConnectionDescriptionPtr description = new co::ConnectionDescription;
+    description->type = co::CONNECTIONTYPE_MPI;
+    description->port = 4242 + co::Global::mpi->getRank();
+    description->rank = co::Global::mpi->getRank();
+
+    const bool isClient =  co::Global::mpi->getRank() != 0;
+
+    localNode->addListener( description );
+
+    if( isClient )
+    {
+        co::NodePtr node = new PerfNodeProxy;
+        description->rank = 0;
+        description->port = 4242;
+        node->addConnectionDescription( description );
+        localNode->connect( node );
+    }
+}
+#endif
+
 }
 
 int main( int argc, char **argv )
@@ -228,33 +255,48 @@ int main( int argc, char **argv )
     }
     localNode->getZeroconf().set( "coNodeperf", co::Version::getString( ));
 
+
+#ifdef COLLAGE_USE_MPI
+    /* Check if started with mpirun and size of MPI_COMM_WORLD
+     * is equal to 2.
+     */
+    if( co::Global::mpi->supportsThreads() &&
+            co::Global::mpi->getSize() > 1 )
+    {
+        runMPI( localNode );
+    }
+    else
+#endif
+    {
+        // run
+        if( remote )
+        {
+            co::NodePtr node = new PerfNodeProxy;
+            node->addConnectionDescription( remote );
+            localNode->connect( node );
+        }
+        else if( useZeroconf )
+        {
+            co::Zeroconf zeroconf = localNode->getZeroconf();
+            const co::Strings& instances = localNode->getZeroconf().getInstances();
+            BOOST_FOREACH( const std::string& instance, instances )
+            {
+                if( !zeroconf.get( instance, "coNodeperf" ).empty( ))
+                    localNode->connect( co::NodeID( instance ));
+            }
+        }
+        {
+            lunchbox::ScopedFastRead _mutex( nodes_ );
+            if( nodes_->empty( ))
+                // Add default listener so others can connect to me
+                localNode->addListener( new co::ConnectionDescription );
+        }
+    }
+
     Object object;
     object.setID( co::uint128_t( _objectID + localNode->getNodeID( )));
     LBCHECK( localNode->registerObject( &object ));
 
-    // run
-    if( remote )
-    {
-        co::NodePtr node = new PerfNodeProxy;
-        node->addConnectionDescription( remote );
-        localNode->connect( node );
-    }
-    else if( useZeroconf )
-    {
-        co::Zeroconf zeroconf = localNode->getZeroconf();
-        const co::Strings& instances = localNode->getZeroconf().getInstances();
-        BOOST_FOREACH( const std::string& instance, instances )
-        {
-            if( !zeroconf.get( instance, "coNodeperf" ).empty( ))
-                localNode->connect( co::NodeID( instance ));
-        }
-    }
-    {
-        lunchbox::ScopedFastRead _mutex( nodes_ );
-        if( nodes_->empty( ))
-            // Add default listener so others can connect to me
-            localNode->addListener( new co::ConnectionDescription );
-    }
 
     co::Nodes nodes;
     while( true )

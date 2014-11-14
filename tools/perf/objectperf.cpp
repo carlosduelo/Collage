@@ -29,6 +29,9 @@
 #include <boost/program_options.hpp>
 #pragma warning( default: 4275 )
 #include <iostream>
+#ifdef COLLAGE_USE_MPI
+#  include <mpi.h>
+#endif
 
 #ifndef MIN
 #  define MIN LB_MIN
@@ -297,8 +300,19 @@ public:
         , canChange_( true )
     {
         disableInstanceCache();
+        co::ConnectionDescriptionPtr description = new co::ConnectionDescription;
+
+#ifdef COLLAGE_USE_MPI
+        if( co::Global::mpi->supportsThreads() &&
+                co::Global::mpi->getSize() > 1 )
+        {
+            description->type = co::CONNECTIONTYPE_MPI;
+            description->port = 4242 + co::Global::mpi->getRank();
+            description->rank = co::Global::mpi->getRank();
+        }
+#endif
         // Add default listener so others can connect to me
-        addConnectionDescription( new co::ConnectionDescription );
+        addConnectionDescription( description );
 
         if( !initLocal( argc, argv ))
         {
@@ -306,6 +320,7 @@ public:
             ::exit( EXIT_FAILURE );
         }
         getZeroconf().set( "coObjectperf", co::Version::getString( ));
+
         registerCommand( CMD_NODE_PARAMS, co::CommandFunc< LocalNode >( this,
                                                    &LocalNode::cmdParams_), 0 );
         registerCommand( CMD_NODE_SETUP, co::CommandFunc< LocalNode >( this,
@@ -514,19 +529,39 @@ int main( int argc, char **argv )
         return EXIT_FAILURE;
     }
 
-
     // Set up local node
     const uint64_t size = objectSize;
     const uint64_t num = nObjects;
 
     LocalNodePtr localNode = new LocalNode( argc, argv );
 
-    // connect at least one node
-    if( remote )
+#ifdef COLLAGE_USE_MPI
+    if( co::Global::mpi->supportsThreads() &&
+            co::Global::mpi->getSize() > 1 )
     {
-        co::NodePtr node = new Node;
-        node->addConnectionDescription( remote );
-        localNode->connect( node );
+        useZeroconf = false;
+        if( co::Global::mpi->getRank() != 0 ) // if client
+        {
+            co::ConnectionDescriptionPtr description =
+                                                new co::ConnectionDescription;
+            co::NodePtr node = new Node;
+            description->type = co::CONNECTIONTYPE_MPI;
+            description->rank = 0;
+            description->port = 4242;
+            node->addConnectionDescription( description );
+            localNode->connect( node );
+        }
+    }
+    else
+#endif
+    {
+        // connect at least one node
+        if( remote )
+        {
+            co::NodePtr node = new Node;
+            node->addConnectionDescription( remote );
+            localNode->connect( node );
+        }
     }
 
     Nodes nodes;
