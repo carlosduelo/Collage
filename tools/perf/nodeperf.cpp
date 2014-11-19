@@ -253,7 +253,6 @@ int main( int argc, char **argv )
         co::exit();
         return EXIT_FAILURE;
     }
-    localNode->getZeroconf().set( "coNodeperf", co::Version::getString( ));
 
 
 #ifdef COLLAGE_USE_MPI
@@ -268,6 +267,8 @@ int main( int argc, char **argv )
     else
 #endif
     {
+        localNode->getZeroconf().set( "coNodeperf", co::Version::getString( ));
+
         // run
         if( remote )
         {

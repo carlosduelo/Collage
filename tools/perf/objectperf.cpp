@@ -310,7 +310,10 @@ public:
             description->port = 4242 + co::Global::mpi->getRank();
             description->rank = co::Global::mpi->getRank();
         }
+        else
 #endif
+        getZeroconf().set( "coObjectperf", co::Version::getString( ));
+
         // Add default listener so others can connect to me
         addConnectionDescription( description );
 
@@ -319,7 +322,6 @@ public:
             co::exit();
             ::exit( EXIT_FAILURE );
         }
-        getZeroconf().set( "coObjectperf", co::Version::getString( ));
 
         registerCommand( CMD_NODE_PARAMS, co::CommandFunc< LocalNode >( this,
                                                    &LocalNode::cmdParams_), 0 );
