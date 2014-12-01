@@ -297,9 +297,10 @@ private:
         {
             LBASSERT( _bytesReceived <= 0 );
 
-            mpiDispatcher->wait( _tag );
-
             MPI_Status status;
+            mpiDispatcher->wait( _tag, status );
+
+            #if 0
             if( MPI_SUCCESS != MPI_Probe( MPI_ANY_SOURCE,
                                             _tag,
                                             MPI_COMM_WORLD,
@@ -309,6 +310,7 @@ private:
                 bytesRead  = -1;
                 break;
             }
+            #endif
 
             int32_t bytesR = 0;
 
@@ -416,9 +418,10 @@ private:
 
     bool _waitAndCheckEOF( )
     {
-        mpiDispatcher->wait( _tag );
-
         MPI_Status status;
+        mpiDispatcher->wait( _tag, status );
+
+        #if 0
         if( MPI_SUCCESS != MPI_Probe( MPI_ANY_SOURCE,
                                         _tag,
                                         MPI_COMM_WORLD,
@@ -427,6 +430,7 @@ private:
             LBERROR << "Error retrieving messages" << std::endl;
             return true;
         }
+        #endif
 
         int32_t bytesR = 0;
 
@@ -529,7 +533,8 @@ public:
     virtual void run()
     {
         mpiDispatcher->registerClient( _tag );
-        mpiDispatcher->wait( _tag );
+        MPI_Status status;
+        mpiDispatcher->wait( _tag, status );
 
         int32_t peerRank = -1;
         #if 0
@@ -562,7 +567,6 @@ public:
             return;
         }
         #else
-        MPI_Status status;
         if( MPI_SUCCESS != MPI_Recv( &peerRank, 1,
                                         MPI_INT,
                                         MPI_ANY_SOURCE,

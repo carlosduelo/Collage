@@ -1,4 +1,4 @@
-;
+
 /* Copyright (c) 2014, Carlos Duelo <cduelo@cesvima.upm.es>
  *
  * This file is part of Collage <https://github.com/Eyescale/Collage>
@@ -25,9 +25,12 @@
 #include <lunchbox/thread.h>
 #include <lunchbox/scopedMutex.h>
 #include <lunchbox/monitor.h>
+#include <lunchbox/mtQueue.h>
 
 #include <memory>
 #include <unordered_map>
+
+#include <mpi.h>
 
 namespace
 {
@@ -49,18 +52,18 @@ public:
     virtual void run();
 
     void registerClient( uint32_t tag );
-    
+
     void deregisterClient( uint32_t tag );
 
-    bool wait( uint32_t tag );
+    bool wait( uint32_t tag, MPI_Status& status );
 
 
 private:
-    typedef std::unique_ptr< lunchbox::Condition > cond_ptr;
+    typedef std::unique_ptr< lunchbox::MTQueue< MPI_Status > > client_ptr;
 
     lunchbox::Monitor< bool >       _running;
     lunchbox::Monitor< bool >       _monitor;
-    std::unordered_map< uint32_t, cond_ptr >  _clients;
+    std::unordered_map< uint32_t, client_ptr >  _clients;
     lunchbox::Lock                  _lock;
 };
 

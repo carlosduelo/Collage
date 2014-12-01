@@ -21,8 +21,6 @@
 
 #include "global.h"
 
-#include <mpi.h>
-
 namespace co
 {
 
@@ -30,7 +28,6 @@ void MPIDispatcher::run()
 {
     while( _running )
     {
-        std::cout << "CLOOOOSE 1" << std::endl;
         while( _monitor.waitEQ( true ) && _running )
         {
             MPI_Status status;
@@ -58,12 +55,13 @@ void MPIDispatcher::run()
             else
             {
                 lunchbox::ScopedMutex< > mutex( _lock );
-                cond_ptr &entry = _clients[ status.MPI_TAG ]; 
+                client_ptr &entry = _clients[ status.MPI_TAG ];
 
                 if( entry )
-                    entry->signal();
+                    entry->push( status );
                 else
-                    LBWARN << "Tag not resgister in MPIDispatcher" << std::endl;
+                    LBWARN << "Tag " << status.MPI_TAG
+                           << " not resgister in MPIDispatcher" << std::endl;
             }
         }
     }
@@ -73,7 +71,6 @@ void MPIDispatcher::run()
 
 void MPIDispatcher::close()
 {
-    std::cout << "CLOSE MPI DISPATCHER"<<std::endl;
     LBASSERT( !_monitor );
     _running = false;
     _monitor = true;
@@ -83,11 +80,11 @@ void MPIDispatcher::close()
 void MPIDispatcher::registerClient( uint32_t tag )
 {
     lunchbox::ScopedMutex< > mutex( _lock );
-    cond_ptr &entry = _clients[ tag ]; 
+    client_ptr &entry = _clients[ tag ];
 
     LBASSERTINFO( !entry, "Tag not resgister in MPIDispatcher" );
 
-    entry = cond_ptr( new lunchbox::Condition() );
+    entry = client_ptr( new lunchbox::MTQueue< MPI_Status >() );
     _monitor = true;
 }
 
@@ -113,14 +110,14 @@ void MPIDispatcher::deregisterClient( uint32_t tag )
     }
 }
 
-bool MPIDispatcher::wait( uint32_t tag )
+bool MPIDispatcher::wait( uint32_t tag, MPI_Status& status )
 {
     _lock.set();
-    cond_ptr &entry = _clients[ tag ]; 
+    client_ptr &entry = _clients[ tag ];
     _lock.unset();
 
     LBASSERTINFO( entry, "Tag not resgister in MPIDispatcher" );
 
-    return entry->timedWait( (const unsigned) co::Global::getTimeout() );
+    return entry->timedPop( (const unsigned) co::Global::getTimeout(), status );
 }
 }
