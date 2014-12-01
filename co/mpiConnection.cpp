@@ -18,20 +18,24 @@
  */
 
 #include "mpiConnection.h"
+#include "mpiDispatcher.h"
 #include "connectionDescription.h"
 #include "global.h"
 
 #include <lunchbox/mtQueue.h>
 #include <lunchbox/thread.h>
+#include <lunchbox/condition.h>
 
-#include <boost/date_time/posix_time/posix_time.hpp>
-#include <boost/thread/thread.hpp>
-
+#include <memory>
+#include <map>
 #include <set>
+
 #include <mpi.h>
 
 namespace
 {
+
+co::MPIDispatcher_ptr mpiDispatcher( new co::MPIDispatcher() );
 
 typedef lunchbox::RefPtr< co::EventConnection > EventConnectionPtr;
 
@@ -42,7 +46,7 @@ typedef lunchbox::RefPtr< co::EventConnection > EventConnectionPtr;
  * Due to the tag is defined by a 16 bits integer on
  * ConnectionDescription ( the real name is port but it
  * is reused for this purpuse ). The listeners always
- * use tags [ 0, 65535 ] and others [ 65536, 2147483648 ].
+ * use tags [ 1, 65535 ] and others [ 65536, MPI_TAG_UB ].
  */
 static class TagManager
 {
@@ -56,6 +60,8 @@ public:
     bool registerTag(const uint32_t tag)
     {
         lunchbox::ScopedMutex< > mutex( _lock );
+
+        LBASSERTINFO( tag != 0, "Tag 0 is reserved" );
 
         if( _tags.find( tag ) != _tags.end( ) )
             return false;
@@ -82,7 +88,7 @@ public:
         do
         {
             _nextTag++;
-            LBASSERT( _nextTag < 2147483648 )
+            LBASSERT( _nextTag < MPI_TAG_UB - 1 );
         }
         while( _tags.find( _nextTag ) != _tags.end( ) );
 
@@ -133,6 +139,8 @@ public:
 
     virtual void run()
     {
+        mpiDispatcher->registerClient( _tag );
+
         int64_t bytesRead = 0;
         while( 1 )
         {
@@ -196,6 +204,8 @@ public:
 
         LBASSERT( bytesRead < 0 )
         _readyQ.push( bytesRead );
+
+        mpiDispatcher->deregisterClient( _tag );
     }
 
     int64_t readSync(void * buffer, const int64_t bytes)
@@ -286,6 +296,9 @@ private:
         while( bytes > 0 )
         {
             LBASSERT( _bytesReceived <= 0 );
+
+            mpiDispatcher->wait( _tag );
+
             MPI_Status status;
             if( MPI_SUCCESS != MPI_Probe( MPI_ANY_SOURCE,
                                             _tag,
@@ -403,6 +416,8 @@ private:
 
     bool _waitAndCheckEOF( )
     {
+        mpiDispatcher->wait( _tag );
+
         MPI_Status status;
         if( MPI_SUCCESS != MPI_Probe( MPI_ANY_SOURCE,
                                         _tag,
@@ -513,13 +528,16 @@ public:
 
     virtual void run()
     {
-        MPI_Request request;
+        mpiDispatcher->registerClient( _tag );
+        mpiDispatcher->wait( _tag );
 
         int32_t peerRank = -1;
+        #if 0
         /* Recieve the peer rank.
          * An asychronize function is used to allow future
          * sleep and wait due to save cpu.
          */
+        MPI_Request request;
         if( MPI_SUCCESS != MPI_Irecv( &peerRank, 1,
                                         MPI_INT,
                                         MPI_ANY_SOURCE,
@@ -543,6 +561,23 @@ public:
             _notifier->set();
             return;
         }
+        #else
+        MPI_Status status;
+        if( MPI_SUCCESS != MPI_Recv( &peerRank, 1,
+                                        MPI_INT,
+                                        MPI_ANY_SOURCE,
+                                        _tag,
+                                        MPI_COMM_WORLD,
+                                        &status) )
+        {
+            LBWARN << "Could not start accepting a MPI connection, "
+                   << "closing connection." << std::endl;
+            _status = false;
+            _notifier->set();
+            return;
+        }
+        mpiDispatcher->deregisterClient( _tag );
+        #endif
 
         if( peerRank < 0 )
         {

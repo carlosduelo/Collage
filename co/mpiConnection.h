@@ -23,9 +23,8 @@
 #include <co/connection.h>
 #include <co/eventConnection.h>
 
-#include <lunchbox/monitor.h>
 #include <lunchbox/scopedMutex.h>
-#include<lunchbox/mpi.h>
+#include <lunchbox/mpi.h>
 
 #include <map>
 
