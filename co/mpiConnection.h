@@ -20,23 +20,18 @@
 #ifndef CO_MPICONNECTION_H
 #define CO_MPICONNECTION_H
 
-#include <co/connection.h>
-#include <co/eventConnection.h>
+#include "connection.h"
+#include "eventConnection.h"
 
-#include <lunchbox/scopedMutex.h>
 #include <lunchbox/mpi.h>
-
-#include <map>
-
-namespace co
-{
 
 namespace
 {
-
 typedef lunchbox::RefPtr< co::EventConnection > EventConnectionPtr;
-
 }
+
+namespace co
+{
 
 /* MPI connection
  * Allows peer-to-peer connections if the MPI runtime environment has
@@ -68,13 +63,12 @@ class MPIConnection : public Connection
         virtual Notifier getNotifier() const;
 
         void setPeerRank( int32_t peerRank ) { _peerRank = peerRank; }
-        void setTagSend( int32_t tagSend ) { _tagSend = tagSend; }
-        void setTagRecv( int32_t tagRecv ) { _tagRecv = tagRecv; }
-        void startDispatcher();
+        void setTagSend( uint32_t tagSend ) { _tagSend = tagSend; }
+        void setTagRecv( uint32_t tagRecv ) { _tagRecv = tagRecv; }
         int32_t getRank() { return _rank; }
         int32_t getPeerRank() { return _peerRank; }
-        int32_t getTagSend() { return _tagSend; }
-        int32_t getTagRecv() { return _tagRecv; }
+        uint32_t getTagSend() { return _tagSend; }
+        uint32_t getTagRecv() { return _tagRecv; }
 
     protected:
         void readNB( void* , const uint64_t ) { /* NOP */ }
@@ -84,16 +78,16 @@ class MPIConnection : public Connection
 
     private:
         void _close();
+        uint64_t _copyData( const uint64_t bytes );
 
         int32_t     _rank;
         int32_t     _peerRank;
-        int32_t     _tagSend;
-        int32_t     _tagRecv;
+        uint32_t    _tagSend;
+        uint32_t    _tagRecv;
 
-        class Dispatcher;
-        class AsyncConnection;
-        AsyncConnection * _asyncConnection;
-        Dispatcher  *     _dispatcher;
+        unsigned char * _buffer;
+        unsigned char * _startBuffer;
+        uint64_t         _bytesReceived;
 
         EventConnectionPtr  _event;
 };

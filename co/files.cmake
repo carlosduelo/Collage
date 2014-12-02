@@ -169,8 +169,8 @@ if(UDT_FOUND)
 endif()
 
 if(MPI_FOUND)
-  list(APPEND COLLAGE_HEADERS mpiConnection.h mpiDispatcher.h)
-  list(APPEND COLLAGE_SOURCES mpiConnection.cpp mpiDispatcher.cpp)
+  list(APPEND COLLAGE_HEADERS mpiConnection.h mpiHandler.h)
+  list(APPEND COLLAGE_SOURCES mpiConnection.cpp mpiHandler.cpp)
 endif()
 
 list(SORT COLLAGE_HEADERS)
