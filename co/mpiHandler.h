@@ -63,7 +63,8 @@ public:
 
     bool registerClient( const uint32_t tag, EventConnectionPtr notifier );
 
-    void deregisterClient( const uint32_t tag );
+    void deregisterClient( const uint32_t tag, const uint32_t rank,
+                            const uint32_t tagClose );
 
     bool connect( const int32_t rankS, const int32_t rank, const uint32_t tag,
                    uint32_t& tagSend, uint32_t& tagRec );
@@ -115,8 +116,11 @@ private:
         bool valid;
     };
 
-    typedef std::shared_ptr< lunchbox::MTQueue< Message > >  clientQ_ptr;
-    typedef std::shared_ptr< lunchbox::MTQueue< Listener > > listenerQ_ptr;
+    typedef std::shared_ptr< lunchbox::MTQueue< Message > >     clientQ_ptr;
+    typedef std::shared_ptr< lunchbox::MTQueue< Listener > >    listenerQ_ptr;
+    typedef std::unordered_map< uint32_t, clientQ_ptr >         clientM;
+    typedef std::unordered_map< uint32_t, listenerQ_ptr >       listenerM;
+    typedef std::unordered_map< uint32_t, EventConnectionPtr >  notifierM;
     typedef lunchbox::Monitor< bool >  monitor_t;
 
     monitor_t _running;
@@ -124,10 +128,11 @@ private:
     lunchbox::Lock _lockProbing;
 
     lunchbox::Lock _lockData;
-    std::unordered_map< uint32_t, clientQ_ptr >         _clients;
-    std::unordered_map< uint32_t, listenerQ_ptr >       _listeners;
-    std::unordered_map< uint32_t, EventConnectionPtr >  _notifiers;
+    clientM   _clients;
+    listenerM _listeners;
+    notifierM _notifiers;
 
+    bool _closeRemote( const uint32_t rank, const uint32_t tag );
     bool _checkListener( MPI_Status& status, MPI_Message& msg );
     bool _checkMessage( MPI_Status& status, MPI_Message& msg );
     bool _checkStopProbing( MPI_Status& status, MPI_Message& msg );

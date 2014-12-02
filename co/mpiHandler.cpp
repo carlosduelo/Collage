@@ -154,15 +154,19 @@ bool MPIHandler::registerListener( const uint32_t tag,
 
     {
         lunchbox::ScopedMutex< > mutex( _lockData );
-        listenerQ_ptr &entry = _listeners[ tag ];
+        listenerM::const_iterator it = _listeners.find( tag );
+        LBASSERTINFO( it == _listeners.end(),
+                                "Tag already resgister in MPIHandler" );
 
-        LBASSERTINFO( !entry, "Tag already resgister in MPIHandler" );
+        listenerQ_ptr entry = _listeners[ tag ];
+
 
         entry = listenerQ_ptr( new lunchbox::MTQueue< Listener >() );
         _notifiers[ tag ] = notifier;
     }
 
     _monitor = true;
+    std::cout << _listeners.size() <<" +++++++++++++++++ " << tag << std::endl;
 
     return true;
 }
@@ -171,14 +175,17 @@ void MPIHandler::deregisterListener( const uint32_t tag )
 {
     _lockData.set();
 
-    listenerQ_ptr entry = _listeners[ tag ];
-    if( !entry )
+    listenerM::const_iterator it = _listeners.find( tag );
+
+    if(  it == _listeners.end() )
     {
         _lockData.unset();
         return;
     }
+    listenerQ_ptr entry = it->second;
     _listeners.erase( tag );
     _notifiers.erase( tag );
+    std::cout << _listeners.size()<<" ================= " << tag << std::endl;
 
     _stopProbing();
 
@@ -194,8 +201,11 @@ bool MPIHandler::waitListen( const uint32_t tag, int32_t& rank,
 {
     _lockData.set();
 
-    listenerQ_ptr entry = _listeners[ tag ];
-    LBASSERT( entry );
+    listenerM::const_iterator it = _listeners.find( tag );
+
+    LBASSERT(  it != _listeners.end() );
+
+    listenerQ_ptr entry = it->second;
 
     _lockData.unset();
 
@@ -217,9 +227,10 @@ bool MPIHandler::registerClient( uint32_t tag, EventConnectionPtr notifier )
 {
     {
         lunchbox::ScopedMutex< > mutex( _lockData );
-        clientQ_ptr &entry = _clients[ tag ];
+        clientM::const_iterator it = _clients.find( tag );
 
-        LBASSERTINFO( !entry, "Tag already resgister in MPIHandler" );
+        LBASSERTINFO( it == _clients.end(), "Tag already resgister in MPIHandler" );
+        clientQ_ptr entry = it->second;
 
         entry = clientQ_ptr( new lunchbox::MTQueue< Message >() );
         _notifiers[ tag ] = notifier;
@@ -230,12 +241,15 @@ bool MPIHandler::registerClient( uint32_t tag, EventConnectionPtr notifier )
     return true;
 }
 
-void MPIHandler::deregisterClient( uint32_t tag )
+void MPIHandler::deregisterClient( const uint32_t tag, const uint32_t rank,
+                                        const uint32_t tagClose )
 {
     _lockData.set();
 
-    clientQ_ptr entry = _clients[ tag ];
-    if( !entry )
+    clientM::const_iterator it = _clients.find( tag );
+    clientQ_ptr entry = it->second;
+
+    if( it == _clients.end() )
     {
         _lockData.unset();
         return;
@@ -246,6 +260,8 @@ void MPIHandler::deregisterClient( uint32_t tag )
     _stopProbing();
 
     _lockData.unset();
+
+    _closeRemote( rank, tagClose );
 
     entry->push( Message( ) );
 
@@ -364,14 +380,33 @@ bool MPIHandler::connect( const int32_t rankS,
     return true;
 }
 
+bool MPIHandler::_closeRemote( const uint32_t rank, const uint32_t tag )
+{
+
+    if( MPI_SUCCESS != MPI_Ssend( &tag, 1,
+                                    MPI_INT,
+                                    rank,
+                                    0,
+                                    MPI_COMM_WORLD ) )
+    {
+        LBWARN << "Could not close remote " << rank << " in tag "
+               << tag << std::endl;
+        return false;
+    }
+
+    return true;
+}
+
 bool MPIHandler::_checkListener( MPI_Status& status, MPI_Message& msg )
 {
     _lockData.set();
-    listenerQ_ptr &entry = _listeners[ status.MPI_TAG ];
+    listenerM::const_iterator it = _listeners.find( status.MPI_TAG );
     _lockData.unset();
 
-    if( !entry )
+    if(  it == _listeners.end() )
         return false;
+
+    listenerQ_ptr entry = it->second;
 
     Listener listener;
 
@@ -450,13 +485,47 @@ bool MPIHandler::_checkStopProbing( MPI_Status& status, MPI_Message& msg )
 {
     if( status.MPI_TAG == 0 )
     {
-        char s;
-        if( MPI_SUCCESS != MPI_Mrecv( &s, 1, MPI_BYTE,
-                                        &msg, MPI_STATUS_IGNORE ) )
+        int bytes = 0;
+        /** Consult number of bytes received. */
+        if( MPI_SUCCESS != MPI_Get_count( &status, MPI_BYTE, &bytes ) )
         {
-            LBERROR << "Error retrieving messages" << std::endl;
+            LBERROR << "Error retrieving messages " << std::endl;
+            return false;
         }
-        return true;
+
+        if( bytes == 1 ) // Stop probing
+        {
+            char s;
+            if( MPI_SUCCESS != MPI_Mrecv( &s, 1, MPI_BYTE,
+                                            &msg, MPI_STATUS_IGNORE ) )
+            {
+                LBERROR << "Error retrieving messages" << std::endl;
+            }
+            return true;
+        }
+        else
+        {
+            uint32_t tag;
+            if( MPI_SUCCESS != MPI_Mrecv( &tag, 1, MPI_INT,
+                                            &msg, MPI_STATUS_IGNORE ) )
+            {
+                LBERROR << "Error retrieving messages" << std::endl;
+            }
+            _lockData.set();
+
+            clientQ_ptr entry = _clients[ tag ];
+            LBASSERT( entry );
+            _clients.erase( tag );
+            _notifiers.erase( tag );
+
+            _stopProbing();
+
+            _lockData.unset();
+
+            entry->push( Message( ) );
+
+            tagManager.deregisterTag( tag );
+        }
     }
     return false;
 }
@@ -465,6 +534,8 @@ void MPIHandler::_stopProbing()
 {
     const bool needStop = _clients.size() == 0 && _listeners.size() == 0;
 
+    std::cout << _clients.size() << " " << _listeners.size() <<std::endl;
+
     if( !needStop )
         return;
 
@@ -472,6 +543,7 @@ void MPIHandler::_stopProbing()
 
     if( !_lockProbing.trySet() )
     {
+    std::cout <<"SEND IT"<<std::endl;
         char s;
         if( MPI_SUCCESS != MPI_Ssend( (void*)&s, 1,
                                         MPI_BYTE,

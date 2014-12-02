@@ -149,7 +149,7 @@ void MPIConnection::_close()
         mpiHandler->deregisterListener( _tagRecv );
 
     if( isConnected() )
-        mpiHandler->deregisterClient( _tagRecv );
+        mpiHandler->deregisterClient( _tagRecv, _peerRank, _tagSend );
 
     _setState( STATE_CLOSING );
 
