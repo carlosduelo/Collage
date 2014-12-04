@@ -28,6 +28,7 @@
 #include <sstream>
 
 #ifdef COLLAGE_USE_MPI
+#include "mpiHandler.h"
 lunchbox::MPI * co::Global::mpi = 0;
 #endif
 
@@ -221,8 +222,7 @@ void Global::initMPI( int& argc, char**& argv )
 {
     if( !mpi ) // Do not init if already init
     {
-        static lunchbox::MPI _mpi( argc, argv );
-        mpi = &_mpi;
+          mpi = MPIHandler::startMPI( argc, argv );
     }
 }
 #endif

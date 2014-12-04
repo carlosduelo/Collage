@@ -32,11 +32,7 @@
 
 namespace
 {
-
-co::MPIHandler_ptr mpiHandler( new co::MPIHandler() );
-
 typedef lunchbox::RefPtr< co::EventConnection > EventConnectionPtr;
-
 }
 
 namespace co
@@ -90,9 +86,9 @@ bool MPIConnection::connect()
 
     const int32_t cTag = description->port;
 
-    if( !mpiHandler->connect( _rank, _peerRank, cTag, _tagSend, _tagRecv ) )
+    if( !MPIHandler::getInstance()->connect( cTag, _peerRank,
+                                                _tagRecv, _tagSend, _event ) )
     {
-
         LBWARN << "Could not connect to "
                << _peerRank << " process." << std::endl;
         _close();
@@ -103,12 +99,6 @@ bool MPIConnection::connect()
     LBASSERT( _tagSend > 0 );
 
     _setState( STATE_CONNECTED );
-
-    if( !mpiHandler->registerClient( _tagRecv, _event ) )
-    {
-        _close();
-        return false;
-    }
 
     LBINFO << "Connected with rank " << _peerRank << " on tag "
            << _tagRecv <<  std::endl;
@@ -132,6 +122,13 @@ bool MPIConnection::listen()
     /** Set tag for listening. */
     _tagRecv = getDescription()->port;
 
+    if( !MPIHandler::getInstance()->registerTagListener( _tagRecv ) )
+    {
+       LBERROR << "Tag already register" << std::endl;
+       _close();
+       return false;
+    }
+
     LBINFO << "MPI Connection, rank " << _rank
            << " listening on tag " << _tagRecv << std::endl;
 
@@ -144,12 +141,11 @@ void MPIConnection::_close()
 {
     if( isClosed() )
         return;
-
     if( isListening() )
-        mpiHandler->deregisterListener( _tagRecv );
+        MPIHandler::getInstance()->acceptStop( _tagRecv, _rank );
 
     if( isConnected() )
-        mpiHandler->deregisterClient( _tagRecv, _peerRank, _tagSend );
+        MPIHandler::getInstance()->closeCommunication( _tagRecv );
 
     _setState( STATE_CLOSING );
 
@@ -165,7 +161,7 @@ void MPIConnection::acceptNB()
     /** Ensure tag is register. */
     LBASSERT( _tagRecv != 0 );
 
-    if( !mpiHandler->registerListener( _tagRecv, _event ) )
+    if( !MPIHandler::getInstance()->acceptNB( _tagRecv, _event ) )
     {
         LBWARN << "Error accepting a MPI connection, closing connection."
                << std::endl;
@@ -178,10 +174,11 @@ ConnectionPtr MPIConnection::acceptSync()
     if( !isListening( ))
         return 0;
 
-    int32_t  peerRank;
-    uint32_t tagS;
-    uint32_t tagR;
-    if( !mpiHandler->waitListen( _tagRecv, peerRank, tagS, tagR ) )
+    int32_t  peerRank = -1;
+    uint32_t tagS = 0;
+    uint32_t tagR = 0;
+    if( !MPIHandler::getInstance()->acceptSync( _tagRecv, peerRank,
+                                                                tagR, tagS ) )
     {
         LBWARN << "Error accepting a MPI connection, closing connection."
                << std::endl;
@@ -189,7 +186,7 @@ ConnectionPtr MPIConnection::acceptSync()
         return 0;
     }
 
-    mpiHandler->deregisterListener( _tagRecv );
+    LBASSERT( peerRank >= 0 && tagS > 0 && tagR > 0 );
 
     MPIConnection * newConn = new MPIConnection( );
     newConn->setPeerRank( peerRank );
@@ -199,14 +196,6 @@ ConnectionPtr MPIConnection::acceptSync()
     /** Start dispatcher of new connection. */
     newConn->_setState( STATE_CONNECTED );
 
-    if( !mpiHandler->registerClient( tagR, newConn->_event ) )
-    {
-        LBWARN << "Error accepting a MPI connection, closing connection."
-               << std::endl;
-        _close();
-        return 0;
-    }
-
     LBINFO << "Accepted to rank " << newConn->getPeerRank() << " on tag "
            << newConn->getTagRecv() << std::endl;
 
@@ -214,8 +203,9 @@ ConnectionPtr MPIConnection::acceptSync()
 
     return newConn;
 }
-        
-uint64_t MPIConnection::_copyData( const uint64_t bytes )
+
+uint64_t MPIConnection::_copyData( unsigned char * buffer,
+                                   const uint64_t bytes )
 {
     int64_t bytesRead = 0;
 
@@ -223,14 +213,14 @@ uint64_t MPIConnection::_copyData( const uint64_t bytes )
     {
         if( _bytesReceived >= bytes )
         {
-//            memcpy
+            memcpy( buffer, _buffer, bytes );
             _bytesReceived -= bytes;
             bytesRead = bytes;
             _buffer += bytes;
         }
         else
         {
-//           memcpy()
+            memcpy( buffer, _buffer, _bytesReceived );
             bytesRead = _bytesReceived;
             _bytesReceived = 0;
         }
@@ -248,29 +238,38 @@ uint64_t MPIConnection::_copyData( const uint64_t bytes )
     return bytesRead;
 }
 
-int64_t MPIConnection::readSync( void* /*buffer*/, const uint64_t bytes, const bool)
+int64_t MPIConnection::readSync( void* buffer,
+                                 const uint64_t bytes,
+                                 const bool )
 {
     if( !isConnected() )
         return -1;
 
-    uint64_t bytesRead = _copyData( bytes );
+    unsigned char * buff = (unsigned char*) buffer;
+    uint64_t bytesToRead = bytes;
+    uint64_t bytesRead   = _copyData( buff, bytes );
+    bytesToRead -= bytesRead;
+    buff += bytesRead;
 
-    while( bytes > bytesRead )
+    while( bytesToRead > 0 )
     {
-        LBASSERT( !_buffer );
-        int32_t rank;
+        LBASSERT( !_startBuffer  && _bytesReceived == 0 );
 
-        if( !mpiHandler->recvMsg( _tagRecv, _startBuffer, _bytesReceived, rank ) )
+        if( !MPIHandler::getInstance()->recvMsg( _tagRecv,
+                                            _startBuffer, _bytesReceived ) )
         {
             LBINFO << "Read error, closing connection" << std::endl;
             _close();
             return -1;
         }
-        LBASSERT( rank == _peerRank );
-        _copyData( bytes );
+        _buffer = _startBuffer;
+
+        uint64_t b = _copyData( buff, bytesToRead );
+        bytesToRead -= b;
+        buff  += b;
     }
 
-    return bytesRead;
+    return bytes;
 }
 
 int64_t MPIConnection::write( const void* buffer, const uint64_t bytes )
@@ -278,10 +277,11 @@ int64_t MPIConnection::write( const void* buffer, const uint64_t bytes )
     if( !isConnected() )
         return -1;
 
-    if( !mpiHandler->sendMsg( _peerRank, _tagSend, buffer, bytes ) )
+    if( !MPIHandler::getInstance()->sendMsg( _peerRank, _tagSend,
+                                                        buffer, bytes ) )
     {
         LBWARN << "Write error, closing connection" << std::endl;
-        close();
+        _close();
         return -1;
     }
 

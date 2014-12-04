@@ -26,9 +26,6 @@
 #include <lunchbox/init.h>
 #include <lunchbox/os.h>
 #include <lunchbox/pluginRegistry.h>
-#ifdef COLLAGE_USE_MPI
-#  include <lunchbox/mpi.h>
-#endif
 
 namespace co
 {
