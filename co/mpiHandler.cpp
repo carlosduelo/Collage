@@ -261,7 +261,6 @@ bool MPIHandler::acceptSync( const uint32_t tag, int32_t& peerRank,
     if( Global::mpi->getRank() == peerRank )
     {
         lunchbox::ScopedMutex<> mutex( lockConnects );
-        int size = mapConnects.size();
         mapNewConnections_t::const_iterator itC = mapConnects.find( tagSend );
         if( itC == mapConnects.end() )
         {
