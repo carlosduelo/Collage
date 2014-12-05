@@ -122,13 +122,6 @@ bool MPIConnection::listen()
     /** Set tag for listening. */
     _tagRecv = getDescription()->port;
 
-    if( !MPIHandler::getInstance()->registerTagListener( _tagRecv ) )
-    {
-       LBERROR << "Tag already register" << std::endl;
-       _close();
-       return false;
-    }
-
     LBINFO << "MPI Connection, rank " << _rank
            << " listening on tag " << _tagRecv << std::endl;
 
@@ -174,21 +167,22 @@ ConnectionPtr MPIConnection::acceptSync()
     if( !isListening( ))
         return 0;
 
+    MPIConnection * newConn = new MPIConnection( );
     int32_t  peerRank = -1;
     uint32_t tagS = 0;
     uint32_t tagR = 0;
-    if( !MPIHandler::getInstance()->acceptSync( _tagRecv, peerRank,
-                                                                tagR, tagS ) )
+    if( !MPIHandler::getInstance()->acceptSync( _tagRecv, peerRank, tagR,
+                                                    tagS, newConn->_event ) )
     {
         LBWARN << "Error accepting a MPI connection, closing connection."
                << std::endl;
+        delete newConn;
         _close();
         return 0;
     }
 
     LBASSERT( peerRank >= 0 && tagS > 0 && tagR > 0 );
 
-    MPIConnection * newConn = new MPIConnection( );
     newConn->setPeerRank( peerRank );
     newConn->setTagRecv( tagR );
     newConn->setTagSend( tagS );
@@ -199,12 +193,10 @@ ConnectionPtr MPIConnection::acceptSync()
     LBINFO << "Accepted to rank " << newConn->getPeerRank() << " on tag "
            << newConn->getTagRecv() << std::endl;
 
-    _event->reset();
-
     return newConn;
 }
 
-uint64_t MPIConnection::_copyData( unsigned char * buffer,
+uint64_t MPIConnection::_copyData( void * buffer,
                                    const uint64_t bytes )
 {
     int64_t bytesRead = 0;
@@ -231,7 +223,6 @@ uint64_t MPIConnection::_copyData( unsigned char * buffer,
             _buffer = 0;
             delete _startBuffer;
             _startBuffer = 0;
-            _event->reset();
         }
     }
 
@@ -245,18 +236,18 @@ int64_t MPIConnection::readSync( void* buffer,
     if( !isConnected() )
         return -1;
 
-    unsigned char * buff = (unsigned char*) buffer;
     uint64_t bytesToRead = bytes;
-    uint64_t bytesRead   = _copyData( buff, bytes );
+    uint64_t bytesRead   = _copyData( buffer, bytes );
     bytesToRead -= bytesRead;
-    buff += bytesRead;
+    buffer  = (unsigned char*)buffer + bytesRead;
 
     while( bytesToRead > 0 )
     {
         LBASSERT( !_startBuffer  && _bytesReceived == 0 );
 
-        if( !MPIHandler::getInstance()->recvMsg( _tagRecv,
-                                            _startBuffer, _bytesReceived ) )
+        _startBuffer = MPIHandler::getInstance()->recvMsg( _tagRecv,
+                                                            _bytesReceived );
+        if( !_startBuffer )
         {
             LBINFO << "Read error, closing connection" << std::endl;
             _close();
@@ -264,9 +255,9 @@ int64_t MPIConnection::readSync( void* buffer,
         }
         _buffer = _startBuffer;
 
-        uint64_t b = _copyData( buff, bytesToRead );
+        uint64_t b = _copyData( buffer, bytesToRead );
         bytesToRead -= b;
-        buff  += b;
+        buffer  = (unsigned char*)buffer + b;
     }
 
     return bytes;

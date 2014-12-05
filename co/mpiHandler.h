@@ -51,12 +51,11 @@ public:
 
     virtual void run();
 
-    bool registerTagListener( const uint32_t tag );
-
     bool acceptNB( const uint32_t tag, EventConnectionPtr notifier );
 
     bool acceptSync( const uint32_t tag, int32_t& peerRank,
-                        uint32_t& tagRecv, uint32_t& tagSend );
+                        uint32_t& tagRecv, uint32_t& tagSend,
+                        EventConnectionPtr notifier);
 
     void acceptStop( const uint32_t tag, const int32_t rank );
 
@@ -66,7 +65,7 @@ public:
 
     void closeCommunication( const uint32_t tag );
 
-    bool recvMsg( const uint32_t tag, unsigned char*& buffer, uint64_t& bytes );
+    unsigned char * recvMsg( const uint32_t tag, uint64_t& bytes );
 
     bool sendMsg( const int32_t rank, const uint32_t tag,
                         const void* buffer, const uint64_t bytes );

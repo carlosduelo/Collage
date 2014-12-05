@@ -111,15 +111,17 @@ struct NewConnection
 
 struct Message
 {
-    Message( ) {}
-    Message( MPI_Status  s, MPI_Message m )
+    Message( ) : valid( false ) {}
+    Message( MPI_Status  s, MPI_Message m, bool v )
             : status ( s )
             , msg( m )
+            , valid( v )
     {
     }
 
     MPI_Status  status;
     MPI_Message msg;
+    bool valid;
 };
 
 typedef lunchbox::MTQueue< Message > messageQ_t;
@@ -210,13 +212,10 @@ void MPIHandler::run()
     }
 }
 
-bool MPIHandler::registerTagListener( const uint32_t tag )
-{
-    return tagManager.registerTag( tag );
-}
-
 bool MPIHandler::acceptNB( const uint32_t tag, EventConnectionPtr notifier )
 {
+    tagManager.registerTag( tag );
+
     lunchbox::ScopedMutex<> mutex( lockListeners );
 
     if( mapListeners.find( tag ) != mapListeners.end() )
@@ -236,7 +235,8 @@ bool MPIHandler::acceptNB( const uint32_t tag, EventConnectionPtr notifier )
 }
 
 bool MPIHandler::acceptSync( const uint32_t tag, int32_t& peerRank,
-                                uint32_t& tagRecv, uint32_t& tagSend )
+                                uint32_t& tagRecv, uint32_t& tagSend,
+                                EventConnectionPtr notifier )
 {
     newConnection_ptr listener;
     {
@@ -257,6 +257,7 @@ bool MPIHandler::acceptSync( const uint32_t tag, int32_t& peerRank,
     tagRecv = listener->tagRecv;
     tagSend = listener->tagSend;
     const bool err = listener->error;
+    listener->notifier->reset();
 
     if( Global::mpi->getRank() == peerRank )
     {
@@ -277,10 +278,12 @@ bool MPIHandler::acceptSync( const uint32_t tag, int32_t& peerRank,
         mapListeners.erase( tag );
     }
 
+    tagManager.deregisterTag( tag );
+
     if( err )
         return false;
 
-    return _startCommunication( tagRecv, peerRank, tagSend, listener->notifier );
+    return _startCommunication( tagRecv, peerRank, tagSend, notifier );
 }
 
 void MPIHandler::acceptStop( const uint32_t tag, const int32_t rank )
@@ -424,9 +427,8 @@ void MPIHandler::closeCommunication( const uint32_t tag )
     }
 }
 
-bool MPIHandler::recvMsg( const uint32_t tag,
-                          unsigned char*& buffer,
-                          uint64_t& bytes )
+unsigned char * MPIHandler::recvMsg( const uint32_t tag,
+                                      uint64_t& bytes )
 {
     Message m;
     mapConnectionDetail_t::const_iterator it;
@@ -435,23 +437,25 @@ bool MPIHandler::recvMsg( const uint32_t tag,
         lunchbox::ScopedMutex<> mutex( lockCommunications );
         it = mapCommunications.find( tag );
         if( it == mapCommunications.end() )
-            return false;
+            return 0;
         conn = it->second;
     }
 
     conn->monitorRead.waitEQ( true );
     if( conn->connClosed )
-        return false;
+        return 0;
 
-    LBASSERT( !conn->queue.isEmpty() );
     if( !conn->queue.timedPop( co::Global::getTimeout(), m ) )
-        return false;
+        return 0;
+
+    if( !m.valid )
+        return 0;
 
     int b = 0;
     if( MPI_SUCCESS != MPI_Get_count( &m.status, MPI_BYTE, &b ) )
     {
         LBERROR << "Error retrieving messages " << std::endl;
-        return false;
+        return 0;
     }
 
     unsigned char * buff = new unsigned char[ b ];
@@ -460,19 +464,23 @@ bool MPIHandler::recvMsg( const uint32_t tag,
     {
         LBERROR << "Error retrieving messages" << std::endl;
         delete buff;
-        return false;
+        return 0;
     }
 
     bytes = b;
-    buffer = buff;
+    {
+        lunchbox::ScopedMutex<> mutex( lockCommunications );
+        if( conn->queue.empty() )
+            conn->notifier->reset();
+    }
 
-    return true;
+    return buff;
 }
 
 bool MPIHandler::sendMsg( const int32_t rank, const uint32_t tag,
                            const void* buffer, const uint64_t bytes )
 {
-    if( MPI_SUCCESS != MPI_Send( &buffer, bytes,
+    if( MPI_SUCCESS != MPI_Send( buffer, bytes,
                                     MPI_BYTE,
                                     rank,
                                     tag,
@@ -491,19 +499,29 @@ bool MPIHandler::_startCommunication( const uint32_t tag,
 {
     {
         lunchbox::ScopedMutex<> mutex( lockCommunications );
+        mapConnectionDetail_t::const_iterator it =
+                                mapCommunications.find( tag );
 
-        if( mapCommunications.find( tag ) != mapCommunications.end() )
+        if( it != mapCommunications.end() )
         {
-            LBERROR << "Tag " << tag << " already accepting" << std::endl;
-            return false;
+            LBASSERT( !it->second->queue.empty() );
+            it->second->tagClose = tagClose;
+            it->second->peerRank = rank;
+            it->second->notifier = notifier;
+            it->second->monitorRead = true;
+            it->second->connClosed = false;
+            notifier->set();
         }
-        connectionDetail_ptr &conn = mapCommunications[ tag ];
-        conn = connectionDetail_ptr( new ConnectionDetail );
-        conn->monitorRead = false;
-        conn->connClosed = false;
-        conn->tagClose = tagClose;
-        conn->peerRank = rank;
-        conn->notifier = notifier;
+        else
+        {
+            connectionDetail_ptr &conn = mapCommunications[ tag ];
+            conn = connectionDetail_ptr( new ConnectionDetail );
+            conn->monitorRead = false;
+            conn->connClosed = false;
+            conn->tagClose = tagClose;
+            conn->peerRank = rank;
+            conn->notifier = notifier;
+        }
     }
 
     return true;
@@ -643,6 +661,7 @@ void MPIHandler::_connectionClosed( unsigned char * message )
         }
         else
         {
+            it->second->queue.push( Message( ) );
             it->second->connClosed = true;
             it->second->monitorRead = true;
             it->second->notifier->set();
@@ -672,17 +691,26 @@ void MPIHandler::_processMessage( MPI_Status& status, MPI_Message& msg )
         lunchbox::ScopedMutex<> mutex( lockCommunications );
         mapConnectionDetail_t::const_iterator it =
                                 mapCommunications.find( tag );
-        LBASSERTINFO( it != mapCommunications.end(),
-                                "Tag " << tag << " is not register" );
-        if( it->second->connClosed )
+        if ( it == mapCommunications.end() )
         {
-            mapCommunications.erase( it );
+            connectionDetail_ptr &conn = mapCommunications[ tag ];
+            conn = connectionDetail_ptr( new ConnectionDetail );
+            conn->monitorRead = false;
+            conn->connClosed = false;
+            conn->queue.push( Message( status, msg, true ) );
         }
         else
         {
-            it->second->queue.push( Message( status, msg ) );
-            it->second->monitorRead = true;
-            it->second->notifier->set();
+            if( it->second->connClosed )
+            {
+                mapCommunications.erase( it );
+            }
+            else
+            {
+                it->second->queue.push( Message( status, msg, true ) );
+                it->second->monitorRead = true;
+                it->second->notifier->set();
+            }
         }
     }
 }

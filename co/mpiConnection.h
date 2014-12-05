@@ -78,7 +78,7 @@ class MPIConnection : public Connection
 
     private:
         void _close();
-        uint64_t _copyData( unsigned char * buffer, const uint64_t bytes );
+        uint64_t _copyData( void * buffer, const uint64_t bytes );
 
         int32_t     _rank;
         int32_t     _peerRank;
