@@ -154,6 +154,9 @@ lunchbox::Lock        lockCommunications;
 
 co::MPIHandler * mpiHandler = 0;
 
+MPI_Comm Dup_Comm_World, Collage_Comm;
+MPI_Group World_Group;
+
 }
 
 namespace co
@@ -164,6 +167,20 @@ lunchbox::MPI* MPIHandler::startMPI( int& argc, char**& argv )
     if( !_mpi )
     {
         static lunchbox::MPI mpi( argc, argv );
+        // Create a communicator for Collage Communications
+        MPI_Comm_dup( MPI_COMM_WORLD, &Dup_Comm_World );
+        MPI_Comm_group( Dup_Comm_World, &World_Group );
+        MPI_Comm_create( Dup_Comm_World, World_Group, &Collage_Comm);
+#ifndef NDEBUG
+        int size_W_C, size_C_C;
+        MPI_Comm_size( MPI_COMM_WORLD, &size_W_C );
+        MPI_Comm_size( Collage_Comm, &size_C_C );
+        LBASSERT( size_W_C == size_C_C );
+        int rank_W_C, rank_C_C;
+        MPI_Comm_rank( MPI_COMM_WORLD, &rank_W_C );
+        MPI_Comm_rank( Collage_Comm, &rank_C_C );
+        LBASSERT( rank_W_C == rank_C_C );
+#endif
         static MPIHandler _mpiHandler;
         _mpi = &mpi;
         mpiHandler = &_mpiHandler;
@@ -194,7 +211,7 @@ void MPIHandler::run()
 
         if( MPI_SUCCESS != MPI_Mprobe( MPI_ANY_SOURCE,
                                         MPI_ANY_TAG,
-                                        MPI_COMM_WORLD,
+                                        Collage_Comm,
                                         &msg,
                                         &status ) )
         {
@@ -306,7 +323,7 @@ void MPIHandler::acceptStop( const uint32_t tag, const int32_t rank )
                                     MPI_BYTE,
                                     rank,
                                     0,
-                                    MPI_COMM_WORLD ) )
+                                    Collage_Comm ) )
     {
         LBERROR << "Error sending end of accepting" << std::endl;
         abort();
@@ -346,7 +363,7 @@ bool MPIHandler::connect( const uint32_t tag, const int32_t peerRank,
                                         MPI_BYTE,
                                         peerRank,
                                         0,
-                                        MPI_COMM_WORLD ) )
+                                        Collage_Comm ) )
         {
             LBWARN << "Error sending MPI tag to peer in a MPI connection."
                    << std::endl;
@@ -420,7 +437,7 @@ void MPIHandler::closeCommunication( const uint32_t tag )
                                     MPI_BYTE,
                                     rank,
                                     0,
-                                    MPI_COMM_WORLD ) )
+                                    Collage_Comm ) )
     {
         LBERROR << "Error sending end of connection" << std::endl;
         abort();
@@ -484,7 +501,7 @@ bool MPIHandler::sendMsg( const int32_t rank, const uint32_t tag,
                                     MPI_BYTE,
                                     rank,
                                     tag,
-                                    MPI_COMM_WORLD ) )
+                                    Collage_Comm ) )
     {
         return false;
     }
@@ -603,7 +620,7 @@ void MPIHandler::_acceptConnection( unsigned char * message,
                                     MPI_BYTE,
                                     peerRank,
                                     0,
-                                    MPI_COMM_WORLD ) )
+                                    Collage_Comm ) )
     {
         LBWARN << "Error sending MPI tag to peer in a MPI connection."
                << std::endl;
@@ -722,7 +739,7 @@ void MPIHandler::_stopProbing()
                                     MPI_BYTE,
                                     Global::mpi->getRank(),
                                     0,
-                                    MPI_COMM_WORLD ) )
+                                    Collage_Comm ) )
     {
         LBWARN << "Write error, pausing mpi handler" << std::endl;
         abort();
