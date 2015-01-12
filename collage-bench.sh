@@ -16,8 +16,8 @@ limitPkgSize=`expr $(expr 32 \* $(expr 1024 \* 1024)) + 1`
 # TCPIP
 while [ $pkgSize -lt $limitPkgSize ]
 do
-commandServer="cd $1 && ./bin/coNetperf -s $2:4343:TCPIP"
-commandClient="cd $1 && ./bin/coNetperf -c $2:4343:TCPIP -n $numPkg -p $pkgSize >> $HOME/ethernetTCPIP$name.txt"
+commandServer="cd $1 && ./bin/coNetperf -s $2:4343:TCPIP -a"
+commandClient="cd $1 && ./bin/coNetperf -c $2:4343:TCPIP -a -n $numPkg -p $pkgSize >> $HOME/ethernetTCPIP$name.txt"
 echo $commandServer
 echo $commandClient
 ssh $2 $commandServer &> /dev/null &
@@ -32,7 +32,7 @@ done
 pkgSize=1024
 while [ $pkgSize -lt $limitPkgSize ]
 do
-commandServer="cd $1 && ./bin/coNetperf -s $4:4343:TCPIP"
+commandServer="cd $1 && ./bin/coNetperf -s $4:4343:TCPIP -a"
 commandClient="cd $1 && ./bin/coNetperf -c $4:4343:TCPIP -a -n $numPkg -p $pkgSize >> $HOME/infinibandTCPIP$name.txt"
 echo $commandServer
 echo $commandClient
@@ -46,8 +46,8 @@ done
 pkgSize=1024
 while [ $pkgSize -lt $limitPkgSize ]
 do
-commandServer="cd $1 && ./bin/coNetperf -s $4:4343:RDMA"
-commandClient="cd $1 && ./bin/coNetperf -c $4:4343:RDMA -n $numPkg -p $pkgSize >> $HOME/infinibandRDMA$name.txt"
+commandServer="cd $1 && ./bin/coNetperf -s $4:4343:RDMA -a"
+commandClient="cd $1 && ./bin/coNetperf -c $4:4343:RDMA -a -n $numPkg -p $pkgSize >> $HOME/infinibandRDMA$name.txt"
 echo $commandServer
 echo $commandClient
 ssh $2 $commandServer &> /dev/null &
@@ -60,6 +60,6 @@ done
 
 while [ $pkgSize -lt $limitPkgSize ]
 do
-srun -n 2 $1./bin/coNetperf -n $numPkg -p $pkgSize >> $HOME/MPI$name.txt
+srun -n 2 $1./bin/coNetperf -a -n $numPkg -p $pkgSize >> $HOME/MPI$name.txt
 pkgSize=`expr $pkgSize \* 2`
 done
