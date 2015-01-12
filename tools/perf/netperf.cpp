@@ -41,6 +41,9 @@ namespace po = boost::program_options;
 
 namespace
 {
+bool _printAvg = false;
+double _sendAvg = 0.0;
+unsigned _sendTimes = 0;
 lunchbox::a_int32_t _nClients;
 lunchbox::Lock      _mutexPrint;
 uint32_t _delay = 0;
@@ -92,9 +95,10 @@ public:
         co::ConstConnectionDescriptionPtr desc =
             _connection->getDescription();
         const lunchbox::ScopedMutex<> mutex( _mutexPrint );
-        std::cerr << "Recv perf: " << _mBytesSec / time * _nSamples
-                  << "MB/s (" << _nSamples / time * 1000.f  << "pps) from "
-                  << desc->toString() << std::endl;
+	if( !_printAvg )
+            std::cerr << "Recv perf: " << _mBytesSec / time * _nSamples
+                      << "MB/s (" << _nSamples / time * 1000.f  << "pps) from "
+                      << desc->toString() << std::endl;
         _nSamples = 0;
         return true;
     }
@@ -373,7 +377,9 @@ int main( int argc, char **argv )
             ( "wait,w",       po::value<uint32_t>(&waitTime),
               "wait time (ms) between sends (client only)" )
             ( "delay,d",      po::value<uint32_t>(&_delay),
-              "wait time (ms) between receives (server only" );
+              "wait time (ms) between receives (server only" )
+            ( "average,a",    po::bool_switch(&_printAvg)->default_value(false),
+              "print average" );
 
         // parse program options
         po::variables_map variableMap;
@@ -460,10 +466,12 @@ int main( int argc, char **argv )
             {
                 const lunchbox::ScopedMutex<> mutex( _mutexPrint );
                 const size_t nSamples = lastOutput - nPackets;
-                std::cerr << "Send perf: " << mBytesSec / time * nSamples
-                          << "MB/s (" << nSamples / time * 1000.f  << "pps)"
-                          << std::endl;
-
+		if( !_printAvg )
+		   std::cerr << "Send perf: " << mBytesSec / time * nSamples
+		             << "MB/s (" << nSamples / time * 1000.f  << "pps)"
+	                     << std::endl;
+                _sendAvg += mBytesSec / time * nSamples;
+                _sendTimes++;
                 lastOutput = nPackets;
                 clock.reset();
             }
@@ -475,9 +483,12 @@ int main( int argc, char **argv )
         if( nSamples != 0 )
         {
             const lunchbox::ScopedMutex<> mutex( _mutexPrint );
-            std::cerr << "Send perf: " << mBytesSec / time * nSamples
-                      << "MB/s (" << nSamples / time * 1000.f  << "pps)"
-                      << std::endl;
+	    if( !_printAvg )
+                std::cerr << "Send perf: " << mBytesSec / time * nSamples
+                          << "MB/s (" << nSamples / time * 1000.f  << "pps)"
+                          << std::endl;
+            _sendAvg += mBytesSec / time * nSamples;
+            _sendTimes++;
         }
         if ( selector )
         {
@@ -501,5 +512,7 @@ int main( int argc, char **argv )
     LBASSERTINFO( connection->getRefCount() == 1, connection->getRefCount( ));
     connection = 0;
     LBCHECK( co::exit( ));
+    if( _printAvg && _sendTimes )
+	std::cout << _sendAvg / _sendTimes << std::endl;
     return EXIT_SUCCESS;
 }
